@@ -75,8 +75,8 @@
   <div id="orb" class="orb breathe"></div>
 
   <div id="unsupported" class="warn" hidden>
-    This browser can't talk to Bluetooth devices. Use Chrome or Edge on Android, Windows or Mac.
-    On iPhone, open this page in the Bluefy app.
+    This browser can't talk to Bluetooth devices (Firefox and Safari don't support it).
+    Use Chrome, Edge, Opera or Samsung Internet. On iPhone, open this page in the Bluefy app.
   </div>
 
   <button id="connect">Connect to lamp</button>
@@ -181,6 +181,9 @@ async function connect() {
     console.error(e);
     // Chrome uses NotFoundError both for "picker closed" and for "Bluetooth is off".
     if (/cancel/i.test(e.message)) setStatus("No lamp picked. Tap Connect to try again.");
+    // Brave ships Web Bluetooth switched off; the API exists but every request fails like this.
+    else if (/globally disabled/i.test(e.message))
+      setStatus('This browser has Web Bluetooth switched off. In Brave: open brave://flags, enable "Web Bluetooth API", relaunch. Or use Chrome/Edge.');
     else setStatus(`Can't use Bluetooth: ${e.message} Is Bluetooth turned on?`);
     return;
   }
