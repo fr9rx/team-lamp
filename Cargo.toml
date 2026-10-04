@@ -1,0 +1,62 @@
+[package]
+edition      = "2024"
+name         = "ble"
+rust-version = "1.88"
+version      = "0.1.0"
+
+[[bin]]
+name = "ble"
+path = "./src/bin/main.rs"
+
+[dependencies]
+esp-hal = { version = "~1.1.0", features = ["esp32h2", "unstable"] }
+
+esp-rtos = { version = "0.3.0", features = [
+  "embassy",
+  "esp-alloc",
+  "esp-radio",
+  "esp32h2",
+] }
+
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32h2"] }
+
+bt-hci = "0.8.0"
+embassy-executor = { version = "0.10.0", features = [] }
+embassy-time = "0.5.0"
+embedded-io = "0.7.1"
+embedded-io-async = "0.7.0"
+esp-alloc = "0.10.0"
+esp-radio = { version = "0.18.0", features = [
+  "ble",
+  "esp-alloc",
+  "esp32h2",
+  "unstable",
+] }
+trouble-host = { version = "0.6.0", features = ["gatt", "security"] }
+
+critical-section = "1.2.0"
+static_cell      = "2.1.1"
+
+# trouble-host's #[gatt_server] macro expands to `embassy_sync::...` paths, so the
+# version must match the one trouble-host 0.6.0 depends on.
+embassy-futures = "0.1.2"
+embassy-sync    = "0.7.2"
+esp-println     = { version = "0.17.0", features = ["esp32h2"] }
+
+# Bond storage in the `nvs` flash partition.
+embassy-embedded-hal = "0.6.0"
+esp-storage          = { version = "0.9.0", features = ["esp32h2"] }
+sequential-storage   = "5.0.0"
+
+
+# For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
+[profile.dev]
+# The default debug profile is too slow and too big for resource-constrained devices.
+# Always build with some optimizations enabled.
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1     # LLVM can perform better optimizations using a single thread
+debug         = 2     # prefer slower builds but better debugging experience
+lto           = 'fat'
+opt-level     = 's'

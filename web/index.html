@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team Lamp</title>
+<style>
+  :root {
+    --bg: #0e0f13;
+    --card: #181a21;
+    --text: #eef0f6;
+    --muted: #8b90a0;
+    --edge: #2a2d38;
+    --lamp: rgb(0, 90, 255);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 24px 16px;
+  }
+  main { width: 100%; max-width: 420px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: 14px; }
+
+  .orb {
+    width: 140px; height: 140px; margin: 8px auto 28px;
+    border-radius: 50%;
+    background: var(--lamp);
+    box-shadow: 0 0 60px 10px var(--lamp);
+    transition: background .3s, box-shadow .3s;
+  }
+  .orb.breathe { animation: breathe 2.5s ease-in-out infinite; }
+  .orb.rainbow { animation: rainbow 2.5s linear infinite; }
+  .orb.off { background: #222; box-shadow: none; }
+  @keyframes breathe { 50% { opacity: .25; } }
+  @keyframes rainbow { to { filter: hue-rotate(360deg); } }
+
+  button {
+    font: inherit; color: var(--text); cursor: pointer;
+    background: var(--card); border: 1px solid var(--edge);
+    border-radius: 12px; padding: 14px;
+  }
+  button:disabled { opacity: .4; cursor: default; }
+  #connect { width: 100%; background: #2b5cff; border-color: #2b5cff; font-weight: 600; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 20px 0; }
+  .grid button { text-align: left; }
+  .grid button.active { border-color: var(--text); }
+  .grid small { display: block; color: var(--muted); font-size: 12px; }
+
+  .custom { display: flex; gap: 10px; align-items: center; }
+  .custom input[type=color] {
+    width: 52px; height: 48px; padding: 0; border: 1px solid var(--edge);
+    border-radius: 12px; background: var(--card);
+  }
+  .custom select {
+    flex: 1; height: 48px; font: inherit; color: var(--text);
+    background: var(--card); border: 1px solid var(--edge); border-radius: 12px; padding: 0 10px;
+  }
+  #status { color: var(--muted); font-size: 14px; text-align: center; margin-top: 20px; min-height: 1.4em; }
+  .warn { background: #3a2a10; border: 1px solid #6b4d18; border-radius: 12px; padding: 12px; font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Team Lamp</h1>
+  <p class="sub">Set the team status light from your phone.</p>
+
+  <div id="orb" class="orb breathe"></div>
+
+  <div id="unsupported" class="warn" hidden>
+    This browser can't talk to Bluetooth devices. Use Chrome or Edge on Android, Windows or Mac.
+    On iPhone, open this page in the Bluefy app.
+  </div>
+
+  <button id="connect">Connect to lamp</button>
+
+  <div class="grid" id="presets"></div>
+
+  <div class="custom">
+    <input type="color" id="color" value="#ff6ec7" aria-label="Custom color">
+    <select id="mode" aria-label="Effect">
+      <option value="0">Solid</option>
+      <option value="1">Breathe</option>
+    </select>
+    <button id="apply">Set</button>
+  </div>
+
+  <p id="status"></p>
+</main>
+
+<script>
+// Must match LAMP_SERVICE_UUID / LIGHT_CHAR_UUID in src/bin/main.rs.
+const SERVICE = "b47c507f-f216-421c-a88b-839a532d72aa";
+const LIGHT = "b47c5080-f216-421c-a88b-839a532d72aa";
+const MODE = { solid: 0, breathe: 1, rainbow: 2 };
+
+// Free the lamp for teammates if this page sits idle (the lamp takes one connection at a time).
+const IDLE_DISCONNECT_MS = 30_000;
+
+const PRESETS = [
+  { name: "Focus",     hint: "heads down",     state: [MODE.solid,   0, 255, 60] },
+  { name: "Need help", hint: "blocked",        state: [MODE.breathe, 255, 0, 0] },
+  { name: "Shipped!",  hint: "we did it",      state: [MODE.rainbow, 0, 0, 0] },
+  { name: "Chill",     hint: "open to chat",   state: [MODE.breathe, 0, 90, 255] },
+  { name: "Lunch",     hint: "back soon",      state: [MODE.solid,   255, 140, 0] },
+  { name: "Off",       hint: "lights out",     state: [MODE.solid,   0, 0, 0] },
+];
+
+const $ = (id) => document.getElementById(id);
+let device = null;
+let light = null;
+let idleTimer = null;
+let queue = Promise.resolve(); // serialize GATT ops; Web Bluetooth rejects overlapping ones
+
+function setStatus(text) { $("status").textContent = text; }
+
+function showState([mode, r, g, b]) {
+  const orb = $("orb");
+  orb.style.setProperty("--lamp", mode === MODE.rainbow ? "rgb(255,0,0)" : `rgb(${r},${g},${b})`);
+  orb.className = "orb";
+  if (mode === MODE.rainbow) orb.classList.add("rainbow");
+  else if (r + g + b === 0) orb.classList.add("off");
+  else if (mode === MODE.breathe) orb.classList.add("breathe");
+
+  for (const btn of $("presets").children) {
+    btn.classList.toggle("active", btn.dataset.state === String([mode, r, g, b]));
+  }
+}
+
+function armIdleDisconnect() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => device?.gatt.connected && device.gatt.disconnect(), IDLE_DISCONNECT_MS);
+}
+
+async function ensureConnected() {
+  if (device?.gatt.connected && light) return;
+  setStatus("Connecting…");
+  const server = await device.gatt.connect();
+  const service = await server.getPrimaryService(SERVICE);
+  light = await service.getCharacteristic(LIGHT);
+  // The lamp requires an encrypted link; the first read triggers pairing (tap "Pair" if asked).
+  const value = new Uint8Array((await light.readValue()).buffer);
+  showState([...value]);
+  setStatus("Connected");
+}
+
+function run(op) {
+  queue = queue.then(async () => {
+    try {
+      await ensureConnected();
+      await op();
+      armIdleDisconnect();
+    } catch (e) {
+      console.error(e);
+      setStatus(`Something went wrong: ${e.message}`);
+    }
+  });
+  return queue;
+}
+
+function setLamp(state) {
+  return run(async () => {
+    await light.writeValueWithResponse(new Uint8Array(state));
+    showState(state);
+    setStatus("Lamp updated ✨");
+  });
+}
+
+async function connect() {
+  try {
+    device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE] }] });
+  } catch (e) {
+    if (e.name !== "NotFoundError") setStatus(e.message); // NotFoundError = user closed the picker
+    return;
+  }
+  device.addEventListener("gattserverdisconnected", () => {
+    light = null;
+    setStatus("Idle. Tap any button to reconnect.");
+  });
+  $("connect").hidden = true;
+  for (const btn of document.querySelectorAll("button")) btn.disabled = false;
+  run(async () => {});
+}
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+for (const p of PRESETS) {
+  const btn = document.createElement("button");
+  btn.disabled = true;
+  btn.dataset.state = String(p.state);
+  btn.innerHTML = `${p.name}<small>${p.hint}</small>`;
+  btn.onclick = () => setLamp(p.state);
+  $("presets").append(btn);
+}
+$("apply").disabled = true;
+$("apply").onclick = () => setLamp([Number($("mode").value), ...hexToRgb($("color").value)]);
+$("connect").onclick = connect;
+
+if (!navigator.bluetooth) {
+  $("unsupported").hidden = false;
+  $("connect").disabled = true;
+}
+</script>
+</body>
+</html>
