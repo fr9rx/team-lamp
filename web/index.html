@@ -174,10 +174,14 @@ function setLamp(state) {
 }
 
 async function connect() {
+  setStatus("Looking for the lamp…");
   try {
     device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE] }] });
   } catch (e) {
-    if (e.name !== "NotFoundError") setStatus(e.message); // NotFoundError = user closed the picker
+    console.error(e);
+    // Chrome uses NotFoundError both for "picker closed" and for "Bluetooth is off".
+    if (/cancel/i.test(e.message)) setStatus("No lamp picked. Tap Connect to try again.");
+    else setStatus(`Can't use Bluetooth: ${e.message} Is Bluetooth turned on?`);
     return;
   }
   device.addEventListener("gattserverdisconnected", () => {
@@ -209,6 +213,11 @@ $("connect").onclick = connect;
 if (!navigator.bluetooth) {
   $("unsupported").hidden = false;
   $("connect").disabled = true;
+  $("connect").textContent = "Bluetooth not supported in this browser";
+} else {
+  navigator.bluetooth.getAvailability().then((available) => {
+    if (!available) setStatus("Bluetooth looks unavailable on this device. Turn it on, then tap Connect.");
+  });
 }
 </script>
 </body>
